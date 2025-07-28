@@ -422,10 +422,15 @@ mod test {
         state.update_index(true, false, 2, 3);
         assert_eq!(Some(1), state.selected_index);
         state.update_index(true, false, 2, 3);
-        assert_eq!(Some(1), state.selected_index);
+        assert_eq!(None, state.selected_index);
+        state.update_index(true, false, 10, 3);
+        assert_eq!(Some(0), state.selected_index);
+        state.update_index(true, false, 10, 3);
         state.update_index(true, false, 10, 3);
         assert_eq!(Some(2), state.selected_index);
         state.update_index(true, false, 10, 3);
+        assert_eq!(None, state.selected_index);
+        state.update_index(false, true, 10, 3);
         assert_eq!(Some(2), state.selected_index);
     }
     #[test]
