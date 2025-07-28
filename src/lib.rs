@@ -21,8 +21,8 @@
 //! }
 //! ````
 use egui::{
-    text::LayoutJob, Context, FontId, Id, Key, Modifiers, PopupCloseBehavior, TextBuffer, TextEdit,
-    Widget,
+    text::LayoutJob, Context, FontId, Id, Key, Modifiers, Popup, PopupCloseBehavior, TextBuffer,
+    TextEdit, Widget,
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -39,7 +39,7 @@ pub struct AutoCompleteTextEdit<'a, T> {
     search: T,
     /// A limit that can be placed on the maximum number of autocomplete suggestions shown
     max_suggestions: usize,
-    /// If true, highlights the macthing indices in the dropdown
+    /// If true, highlights the matching indices in the dropdown
     highlight: bool,
     /// If true, provide completions when entering multiple space-delimited words
     multiple_words: bool,
@@ -48,6 +48,9 @@ pub struct AutoCompleteTextEdit<'a, T> {
     /// If set to true, the popup will show up when focused instead of waiting for a character to
     /// be typed
     popup_on_focus: bool,
+    /// Width of the autocomplete list
+    /// Defaults to all available space
+    width: f32,
 }
 
 impl<'a, T, S> AutoCompleteTextEdit<'a, T>
@@ -68,6 +71,7 @@ where
             multiple_words: false,
             set_properties: None,
             popup_on_focus: false,
+            width: f32::INFINITY,
         }
     }
 }
@@ -99,6 +103,13 @@ where
     /// be typed
     pub fn popup_on_focus(mut self, popup_on_focus: bool) -> Self {
         self.popup_on_focus = popup_on_focus;
+        self
+    }
+
+    /// This determines the width of the popup autocomplete list
+    /// defaults to all available space
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
         self
     }
 
@@ -139,6 +150,7 @@ where
             multiple_words,
             set_properties,
             popup_on_focus,
+            width,
         } = self;
 
         let id = ui.next_auto_id();
@@ -156,11 +168,11 @@ where
         if let Some(set_properties) = set_properties {
             text_edit = set_properties(text_edit);
         }
-
         let text_edit_output = text_edit.show(ui);
+
         let completion_input = if multiple_words {
             if let Some(cursor_range) = text_edit_output.cursor_range {
-                let index = cursor_range.primary.ccursor.index;
+                let index = cursor_range.primary.index;
                 // Get the word located at the current index
                 let mut start = index;
                 let mut end = index;
@@ -192,7 +204,7 @@ where
             text_field.as_str()
         };
 
-        let mut text_response = text_edit_output.response.clone();
+        let mut text_response = text_edit_output.response;
         state.focused = text_response.has_focus();
 
         let matcher = SkimMatcherV2::default().ignore_case();
@@ -223,26 +235,40 @@ where
             max_suggestions,
         );
 
-        let accepted_by_keyboard = ui.input_mut(|input| input.key_pressed(Key::Enter))
-            || ui.input_mut(|input| input.key_pressed(Key::Tab));
+        // create the popup object
+        let popup = Popup::from_response(&text_response)
+            .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+            .close_behavior(PopupCloseBehavior::IgnoreClicks)
+            .id(id)
+            .align(egui::RectAlign::BOTTOM_START)
+            .width(width)
+            .open(
+                state.focused
+                    && (!text_field.is_empty() || popup_on_focus)
+                    && !match_results.is_empty(),
+            );
+
+        // act on accepting key presses
+        let accepted_by_keyboard = ui.input(|input| input.key_pressed(Key::Enter))
+            || ui.input(|input| input.key_pressed(Key::Tab));
         if let (Some(index), true) = (
             state.selected_index,
             // If accepted by keyboard, close the popup. If the popup is closed with a selected index, take that text
-            accepted_by_keyboard || !ui.memory(|mem| mem.is_popup_open(id)),
+            accepted_by_keyboard || !popup.is_open(),
         ) {
             let match_result = match_results[index].0.as_ref();
             if multiple_words {
                 text_field.replace_range(state.start..state.end, match_result);
                 // Move the cursor to the end of the line.
-                let text_edit_id = text_edit_output.response.id;
-                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), text_edit_id) {
+                let text_edit_id = text_response.id;
+                if let Some(mut state) = TextEdit::load_state(ui.ctx(), text_edit_id) {
                     let ccursor = egui::text::CCursor::new(text_field.chars().count());
                     state
                         .cursor
                         .set_char_range(Some(egui::text::CCursorRange::one(ccursor)));
                     state.store(ui.ctx(), text_edit_id);
                     // Give focus back to the text edit.
-                    ui.memory_mut(|memory| memory.request_focus(text_edit_id));
+                    text_response.request_focus();
                 }
             } else {
                 text_field.replace_with(match_result);
@@ -250,52 +276,35 @@ where
             state.selected_index = None;
             text_response.mark_changed();
         }
-        egui::popup::popup_below_widget(
-            ui,
-            id,
-            &text_response,
-            PopupCloseBehavior::IgnoreClicks,
-            |ui| {
-                for (i, (output, _, match_indices)) in
-                    match_results.iter().take(max_suggestions).enumerate()
-                {
-                    let mut selected = if let Some(x) = state.selected_index {
-                        x == i
-                    } else {
-                        false
-                    };
 
-                    let text = if highlight {
-                        highlight_matches(
-                            output.as_ref(),
-                            match_indices,
-                            ui.style().visuals.widgets.active.text_color(),
-                        )
-                    } else {
-                        let mut job = LayoutJob::default();
-                        job.append(output.as_ref(), 0.0, egui::TextFormat::default());
-                        job
-                    };
-                    //  Update selected index based on hover
-                    if ui.toggle_value(&mut selected, text).hovered() {
-                        state.selected_index = Some(i);
-                    }
-                }
-            },
-        );
+        // show the popup
+        popup.show(|ui| {
+            for (i, (output, _, match_indices)) in
+                match_results.iter().take(max_suggestions).enumerate()
+            {
+                let mut selected = if let Some(x) = state.selected_index {
+                    x == i
+                } else {
+                    false
+                };
 
-        if state.focused
-            && (!text_field.as_str().is_empty() || popup_on_focus)
-            && !match_results.is_empty()
-        {
-            ui.memory_mut(|mem| mem.open_popup(id));
-        } else {
-            ui.memory_mut(|mem| {
-                if mem.is_popup_open(id) {
-                    mem.close_popup()
+                let text = if highlight {
+                    highlight_matches(
+                        output.as_ref(),
+                        match_indices,
+                        ui.style().visuals.widgets.active.text_color(),
+                    )
+                } else {
+                    let mut job = LayoutJob::default();
+                    job.append(output.as_ref(), 0.0, egui::TextFormat::default());
+                    job
+                };
+                //  Update selected index based on hover
+                if ui.toggle_value(&mut selected, text).hovered() {
+                    state.selected_index = Some(i);
                 }
-            });
-        }
+            }
+        });
 
         state.store(ui.ctx(), id);
 
@@ -335,7 +344,7 @@ fn highlight_matches(text: &str, match_indices: &[usize], color: egui::Color32) 
 }
 
 /// Stores the currently selected index in egui state
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(default))]
 struct AutoCompleteTextEditState {
@@ -369,6 +378,7 @@ impl AutoCompleteTextEditState {
         max_suggestions: usize,
     ) {
         self.selected_index = match self.selected_index {
+            _ if match_results_count == 0 => None,
             // Increment selected index when down is pressed, limit it to the number of matches and max_suggestions
             Some(index) if down_pressed => {
                 if index + 1 < min(match_results_count, max_suggestions) {
