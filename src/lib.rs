@@ -26,7 +26,7 @@ use egui::{
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use std::cmp::{min, Reverse};
+use std::cmp::Reverse;
 
 /// Trait that can be used to modify the TextEdit
 type SetTextEditProperties = dyn FnOnce(TextEdit) -> TextEdit;
@@ -378,13 +378,14 @@ impl AutoCompleteTextEditState {
         max_suggestions: usize,
     ) {
         self.selected_index = match self.selected_index {
-            _ if match_results_count == 0 => None,
+            _ if match_results_count == 0 || max_suggestions == 0 => None,
             // Increment selected index when down is pressed, limit it to the number of matches and max_suggestions
+            // Deselect if at last index
             Some(index) if down_pressed => {
-                if index + 1 < min(match_results_count, max_suggestions) {
+                if index + 1 < match_results_count.min(max_suggestions) {
                     Some(index + 1)
                 } else {
-                    Some(index)
+                    None
                 }
             }
             // Decrement selected index if up is pressed. Deselect if at first index
@@ -397,6 +398,8 @@ impl AutoCompleteTextEditState {
             }
             // If nothing is selected and down is pressed, select first item
             None if down_pressed => Some(0),
+            // If nothing is selected and up is pressed, select last item
+            None if up_pressed => Some(match_results_count.min(max_suggestions) - 1),
             // Do nothing if no keys are pressed
             Some(index) => Some(index),
             None => None,
