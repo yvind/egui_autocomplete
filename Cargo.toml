@@ -1,6 +1,6 @@
 [package]
 name = "egui_autocomplete"
-version = "13.0.0"
+version = "14.0.0"
 edition = "2021"
 license = "MIT"
 description = "Auto complete text box for egui"
@@ -20,8 +20,8 @@ members = ["demo"]
 default-members = ["demo"]
 
 [workspace.dependencies]
-egui = { version = "0.34", default-features = false }
-eframe = { version = "0.34", default-features = false, features = [
+egui = { version = "0.35", default-features = false }
+eframe = { version = "0.35", default-features = false, features = [
     "wayland",       # Linux support
     "x11",
     "default_fonts",
